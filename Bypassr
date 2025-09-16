@@ -1,0 +1,106 @@
+--[[
+    Advanced Adonis Bypass
+    Combines detection hooks, kill prevention, debug.info bypass,
+    table mutation, and client-side anti-kick protection.
+    Note: Cannot stop pure server-side kicks.
+--]]
+
+--// CONFIG
+local DEBUG_MODE = false -- Set true for warnings
+local SEND_NOTIFICATIONS = true
+
+--// SERVICES
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+
+--// STORAGE
+local HookedFunctions = {}
+local DetectedFunc, KillFunc
+
+--// Utility: Debug printing
+local function dbgWarn(msg)
+    if DEBUG_MODE then warn(msg) end
+end
+
+--// Utility: Notification
+local function notify(title, text, dur)
+    if SEND_NOTIFICATIONS then
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = title,
+                Text = text,
+                Duration = dur or 3
+            })
+        end)
+    end
+end
+
+--// Thread Identity
+pcall(function() setthreadidentity(2) end)
+
+--// Scan garbage collector for Adonis connections
+for _, obj in ipairs(getgc(true)) do
+    if typeof(obj) == "table" then
+        local detect = rawget(obj, "Detected")
+        local kill = rawget(obj, "Kill")
+
+        -- Hook Detected function
+        if typeof(detect) == "function" and not DetectedFunc then
+            DetectedFunc = detect
+            local old; old = hookfunction(detect, function(action, info, noCrash)
+                if action ~= "_" then
+                    dbgWarn(`Adonis flag blocked | Method: {action} | Info: {info}`)
+                end
+                return true
+            end)
+            table.insert(HookedFunctions, DetectedFunc)
+        end
+
+        -- Hook Kill function
+        if rawget(obj, "Variables") and rawget(obj, "Process") and typeof(kill) == "function" and not KillFunc then
+            KillFunc = kill
+            local old; old = hookfunction(kill, function(info)
+                dbgWarn(`Adonis kill attempt blocked | Info: {info}`)
+            end)
+            table.insert(HookedFunctions, KillFunc)
+        end
+
+        -- Attempt table mutation bypass
+        local indexInstance = rawget(obj, "indexInstance")
+        if typeof(indexInstance) == "table" and indexInstance[1] == "kick" then
+            setreadonly(obj, false)
+            setreadonly(indexInstance, false)
+            rawset(obj, "Table", {"kick", function() coroutine.yield() end})
+            dbgWarn("Mutated indexInstance to block kick communication")
+        end
+    end
+end
+
+--// Hook debug.info sanity check
+do
+    local old; old = hookfunction(getrenv().debug.info, newcclosure(function(...)
+        local a, b = ...
+        if DetectedFunc and a == DetectedFunc then
+            dbgWarn("Blocked Adonis debug.info sanity check")
+            return coroutine.yield(coroutine.running())
+        end
+        return old(...)
+    end))
+end
+
+--// Anti-Kick (__namecall hook)
+do
+    local old; old = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        if typeof(method) == "string" and method:lower() == "kick" then
+            notify("Anti-Kick", "Kick attempt blocked", 3)
+            return nil
+        end
+        return old(self, ...)
+    end)
+end
+
+--// Finalize
+pcall(function() setthreadidentity(7) end)
+notify("ScytheTapsBypass", "loaded successfully", 4)
+dbgWarn(`Hooked {#HookedFunctions} Adonis functions`)
